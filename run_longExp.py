@@ -42,6 +42,20 @@ parser.add_argument('--individual_factor', type=int, default=7, help='individual
 parser.add_argument('--kernel_num', type=int, default=4, help='Kernel number for MK mode')
 parser.add_argument('--mode', type=str, default='MK', help='mode in seasonal blcok [gate,low_rank]')
 parser.add_argument('--n_fft',nargs='+',type=int,default = [8,16,32], help='FFT length')
+# Harmonic prior on the time-frequency kernels (ours). Default OFF = original TFDNet.
+parser.add_argument('--harm_seasonal', type=int, default=0,
+                    help='1: add harmonic prior to the seasonal TFB kernels (works for MK and IK)')
+parser.add_argument('--harm_trend', type=int, default=0,
+                    help='1: add harmonic prior to the trend TFB kernel')
+parser.add_argument('--harm_periods', nargs='+', type=float, default=[],
+                    help='initial fundamental periods, in SAMPLES (e.g. 24 168 for hourly data). '
+                         'Empty means: no harmonic families (falls back to one shared kernel).')
+parser.add_argument('--harm_alpha', type=float, default=0.15,
+                    help='comb width relative to harmonic spacing (small = sharp)')
+parser.add_argument('--harm_beta', type=float, default=0.05,
+                    help='baseline weight of the free slot (fallback for non-harmonic bins)')
+parser.add_argument('--harm_learn_period', type=int, default=1,
+                    help='1: learn the fundamental periods end-to-end, 0: freeze them')
 # Formers
 parser.add_argument('--store_attn', default=False, help='whether to predict unseen future data')
 parser.add_argument('--kernel_size', type=int, default=25, help='decomposition-kernel')

@@ -49,11 +49,23 @@ class Model(nn.Module):
         self.encoder = nn.ModuleList()
         self.n_fft = configs.n_fft
         self.encoder_list = nn.ModuleList()
+        self.harm_seasonal = bool(getattr(configs, 'harm_seasonal', 0))
+        self.harm_trend = bool(getattr(configs, 'harm_trend', 0))
+        harm_periods = list(getattr(configs, 'harm_periods', []) or [])
+        if (self.harm_seasonal or self.harm_trend) and len(harm_periods) == 0:
+            print('[TFDNet][harmonic] WARNING: harmonic is ON but --harm_periods is empty. '
+                  'Only the free-slot basis will exist, i.e. every bin shares ONE kernel.')
         for i in self.n_fft:
             self.encoder_list.append(Encoder(enc_in = configs.enc_in, seq_len = configs.seq_len, n_fft = i,
                                              dropout = configs.dropout, kernel_num = configs.kernel_num,
                                              individual = configs.individual_factor,
-                                             mode = configs.mode))
+                                             mode = configs.mode,
+                                             harm_seasonal = self.harm_seasonal,
+                                             harm_trend = self.harm_trend,
+                                             harm_periods = harm_periods,
+                                             harm_alpha = getattr(configs, 'harm_alpha', 0.15),
+                                             harm_beta = getattr(configs, 'harm_beta', 0.05),
+                                             harm_learn_period = bool(getattr(configs, 'harm_learn_period', 1))))
         self.mlp1 = nn.Linear(len(self.n_fft), 1, bias = False)
         self.mlp2 = nn.Linear(len(self.n_fft), 1, bias = False)
         self.dropout = nn.Dropout(p = configs.dropout)
@@ -94,3 +106,8 @@ class Model(nn.Module):
         out = out.permute(0, 2, 1)
         out = self.revin_layer(out, 'denorm')
         return out
+
+    def harmonic_summary(self):
+        """Print/return the learned fundamentals, alpha and beta (for analysis)."""
+        from layers.HarmonicKernel import summarise_harmonic
+        return summarise_harmonic(self)

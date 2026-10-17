@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+
+# data / run artefacts
+Datasets/
+logs/
+checkpoints/
+results/
+*.npy
+*.npz
+*.pt
+*.pth
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
