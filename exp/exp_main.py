@@ -1,7 +1,8 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
-from models import Informer, Autoformer, Transformer, DLinear,TFDNet
+from models import Informer, Autoformer, Transformer, DLinear, TFDNet, TFDNetTriPool
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
+from utils.distillation import TFDNetDistillLoss
 from torch.optim import lr_scheduler
 from utils.metrics import metric
 import numpy as np
@@ -12,6 +13,8 @@ import torch.nn.functional as F
 
 import os
 import time
+import copy
+from contextlib import nullcontext
 
 import warnings
 import matplotlib.pyplot as plt
@@ -38,6 +41,7 @@ class Exp_Main(Exp_Basic):
             'Informer': Informer,
             'DLinear': DLinear,
             'TFDNet':TFDNet,
+            'TFDNetTriPool': TFDNetTriPool,
         }
         model = model_dict[self.args.model].Model(self.args).float()
 
@@ -62,6 +66,62 @@ class Exp_Main(Exp_Basic):
         elif self.args.loss=='Mixtureloss':
             criterion = MixtureLoss()
         return criterion
+
+    def _build_distillation_teacher(self):
+        if self.args.model != 'TFDNetTriPool':
+            raise ValueError('Knowledge distillation requires TFDNetTriPool')
+        if self.args.use_multi_gpu:
+            raise ValueError(
+                'Knowledge distillation currently supports one GPU only')
+
+        teacher_path = os.path.abspath(self.args.kd_teacher_path)
+        if os.path.isdir(teacher_path):
+            teacher_path = os.path.join(teacher_path, 'checkpoint.pth')
+        if not os.path.isfile(teacher_path):
+            raise FileNotFoundError(
+                'Teacher checkpoint not found: {}'.format(teacher_path))
+
+        teacher_config = copy.deepcopy(self.args)
+        teacher_config.tf_pool = 0
+        teacher_config.kd_enable = 0
+        teacher = TFDNetTriPool.Model(teacher_config).float().to(self.device)
+
+        checkpoint = torch.load(teacher_path, map_location=self.device)
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            checkpoint = checkpoint['state_dict']
+        elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+            checkpoint = checkpoint['model']
+        state_dict = {
+            key[7:] if key.startswith('module.') else key: value
+            for key, value in checkpoint.items()
+        }
+        teacher.load_state_dict(state_dict, strict=True)
+        teacher.eval()
+        for parameter in teacher.parameters():
+            parameter.requires_grad = False
+        return teacher
+
+    def _forward_train(self, batch_x, teacher=None):
+        if teacher is None:
+            return self.model(batch_x), None, None
+        with torch.no_grad():
+            _, teacher_aux = teacher(batch_x, return_aux=True)
+        outputs, student_aux = self.model(batch_x, return_aux=True)
+        return outputs, student_aux, teacher_aux
+
+    def _forward_training_outputs(
+            self, batch_x, batch_x_mark, dec_inp, batch_y_mark, teacher):
+        if teacher is not None:
+            return self._forward_train(batch_x, teacher=teacher)
+        if ('Linear' in self.args.model) or ('TFDNet' in self.args.model):
+            return self.model(batch_x), None, None
+        if self.args.output_attention:
+            outputs = self.model(
+                batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+        else:
+            outputs = self.model(
+                batch_x, batch_x_mark, dec_inp, batch_y_mark)
+        return outputs, None, None
 
 
 
@@ -128,6 +188,18 @@ class Exp_Main(Exp_Basic):
 
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
+        distill_criterion = None
+        teacher = None
+        if self.args.kd_enable:
+            teacher = self._build_distillation_teacher()
+            distill_criterion = TFDNetDistillLoss(
+                prediction_weight=self.args.kd_pred_weight,
+                coarse_weight=self.args.kd_coarse_weight,
+                full_weight=self.args.kd_full_weight,
+                band_weight=self.args.kd_band_weight,
+                spectrum_weight=self.args.kd_spec_weight,
+                high_band_scale=self.args.kd_high_weight,
+            )
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -136,6 +208,7 @@ class Exp_Main(Exp_Basic):
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
+            distill_totals = {}
 
             self.model.train()
             epoch_time = time.time()
@@ -152,38 +225,29 @@ class Exp_Main(Exp_Basic):
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim = 1).float().to(self.device)
 
-                # encoder - decoder
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        if ('Linear' in self.args.model) or ('TFDNet' in self.args.model):
-                            outputs = self.model(batch_x)
-                        else:
-                            if self.args.output_attention:
-                                outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                            else:
-                                outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-
-                        f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        # batch_y_trend=torch.mean(batch_y[:, -self.args.pred_len:, :].reshape(batch_y.shape[0],4,int(self.args.pred_len/4),-1),dim=2).squeeze(dim=2).to(self.device)
-                        loss = criterion(outputs, batch_y)
-
-                        train_loss.append(loss.item())
-                else:
-                    if ('Linear' in self.args.model) or ('TFDNet' in self.args.model):
-                        outputs = self.model(batch_x)
-                    else:
-                        if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-
-                        else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                    # print(outputs.shape,batch_y.shape)
+                context = (
+                    torch.cuda.amp.autocast()
+                    if self.args.use_amp else nullcontext())
+                with context:
+                    outputs, student_aux, teacher_aux = (
+                        self._forward_training_outputs(
+                            batch_x, batch_x_mark, dec_inp, batch_y_mark,
+                            teacher))
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                    batch_y = (
+                        batch_y[:, -self.args.pred_len:, f_dim:]
+                        .to(self.device))
                     loss = criterion(outputs, batch_y)
+                    if distill_criterion is not None:
+                        distill_parts = distill_criterion(
+                            student_aux, teacher_aux, teacher,
+                            feature_dim=f_dim)
+                        loss = loss + distill_parts['total']
+                        for key, value in distill_parts.items():
+                            if key != 'total':
+                                distill_totals.setdefault(key, []).append(
+                                    value.item())
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
@@ -209,6 +273,11 @@ class Exp_Main(Exp_Basic):
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))
+            if distill_totals:
+                summary = ', '.join(
+                    '{}={:.7f}'.format(key, np.mean(values))
+                    for key, values in distill_totals.items())
+                print('Distillation Losses: {}'.format(summary))
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")

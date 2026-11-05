@@ -36,6 +36,87 @@ bash ./scripts/ILI.sh
 ```
 4. You can also run run_longExp.py.
 
+## Tri-band pooled TFDNet
+
+`TFDNetTriPool` is an optional research model and does not modify the original
+`TFDNet` implementation. It adds an additive low/mid/high decomposition and
+complex-aware frame pooling before the TFB kernels. The pooled frame axis is
+restored with interpolation plus a full-resolution residual before inverse
+STFT.
+
+The decomposition is exactly additive:
+
+- low: large moving average
+- mid: small moving average minus the low component
+- high: input minus the small moving average
+
+The model also supports full-resolution teacher to pooled-student distillation.
+The teacher uses `--tf_pool 0`; the student uses `--tf_pool 1`. The teacher is
+loaded from a checkpoint, frozen, and evaluated for every training batch.
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetTriPool --data ETTh1 \
+  --root_path ./Datasets --data_path ETTh1.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode MK --kernel_num 4 \
+  --tri_low_kernel 25 --tri_mid_kernel 5 \
+  --tf_pool 1 --tf_pool_targets 32 64 128 \
+  --tf_pool_mode avg --tf_upsample linear
+```
+
+Run the CPU smoke test without datasets:
+
+```bash
+python tools/check_tri_pool.py
+python tools/check_distillation.py
+```
+
+### Teacher-student distillation
+
+First train a full-resolution tri-band teacher:
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetTriPool --model_id kd_teacher \
+  --data ETTh1 --root_path ./Datasets --data_path ETTh1.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode MK --kernel_num 4 \
+  --tri_low_kernel 25 --tri_mid_kernel 5 --tf_pool 0 \
+  --des kd_teacher
+```
+
+Then train the pooled student. `--kd_teacher_path` accepts either the
+`checkpoint.pth` file or its experiment directory:
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetTriPool --model_id kd_student \
+  --data ETTh1 --root_path ./Datasets --data_path ETTh1.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode MK --kernel_num 4 \
+  --tri_low_kernel 25 --tri_mid_kernel 5 \
+  --tf_pool 1 --tf_pool_targets 32 64 128 \
+  --tf_pool_mode avg --tf_upsample linear \
+  --kd_enable 1 \
+  --kd_teacher_path ./checkpoints/kd_teacher_TFDNetTriPool_ETTh1_ftM_sl336_ll48_pl96_dm512_nh8_el2_dl1_df64_fc1_ebtimeF_dtTrue_kd_teacher_0/checkpoint.pth \
+  --des kd_student
+```
+
+The distilled objective is:
+
+```text
+forecast + 0.10 * prediction
+         + 0.02 * coarse TFB
+         + 0.02 * full-resolution TFB
+         + 0.05 * low/mid/high time-domain outputs
+         + 0.005 * complex spectrum
+```
+
+The high-frequency auxiliary term is multiplied by `0.40`; all weights can be
+changed with the corresponding `--kd_*_weight` arguments. Teacher and student
+must use the same `seq_len`, `enc_in`, and `n_fft` values.
+
 
 
 ## Acknowledgement

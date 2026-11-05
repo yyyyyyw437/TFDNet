@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser(description='Autoformer & Transformer family fo
 parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
 parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
 parser.add_argument('--model', type=str, required=True, default='TFDNet',
-                    help='model name, options: [Autoformer, Informer, Transformer,TFDNet]')
+                    help='model name, options: [Autoformer, Informer, Transformer, TFDNet, TFDNetTriPool]')
 
 # data loader
 parser.add_argument('--data', type=str, required=False, default='ETTm2', help='dataset type')
@@ -42,6 +42,43 @@ parser.add_argument('--individual_factor', type=int, default=7, help='individual
 parser.add_argument('--kernel_num', type=int, default=4, help='Kernel number for MK mode')
 parser.add_argument('--mode', type=str, default='MK', help='mode in seasonal blcok [gate,low_rank]')
 parser.add_argument('--n_fft',nargs='+',type=int,default = [8,16,32], help='FFT length')
+# Tri-band pooled TFDNet. The original TFDNet path is unchanged.
+parser.add_argument('--tri_low_kernel', type=int, default=25,
+                    help='moving-average kernel for the low-frequency band')
+parser.add_argument('--tri_mid_kernel', type=int, default=5,
+                    help='moving-average kernel for the mid-frequency band')
+parser.add_argument('--tf_pool', type=int, default=1,
+                    help='1: pool STFT frames before the TFB kernel, 0: disable')
+parser.add_argument('--tf_pool_targets', nargs=3, type=int,
+                    default=[32, 64, 128],
+                    help='target frame counts for low, mid, high bands')
+parser.add_argument('--tf_pool_mode', type=str, default='avg',
+                    choices=['avg', 'energy'],
+                    help='complex-aware pooling mode')
+parser.add_argument('--tf_upsample', type=str, default='linear',
+                    choices=['linear', 'nearest'],
+                    help='upsampling mode before inverse STFT')
+parser.add_argument('--tri_high_kernel', type=int, default=3,
+                    help='depthwise temporal kernel for the high-frequency band')
+parser.add_argument('--band_gate_hidden', type=int, default=16,
+                    help='hidden width for energy-based band fusion')
+# Teacher-student distillation: full-resolution teacher -> pooled student.
+parser.add_argument('--kd_enable', type=int, default=0,
+                    help='1: distill a full-resolution TFDNetTriPool teacher')
+parser.add_argument('--kd_teacher_path', type=str, default='',
+                    help='teacher checkpoint.pth or its experiment directory')
+parser.add_argument('--kd_pred_weight', type=float, default=0.10,
+                    help='weight for prediction-space distillation')
+parser.add_argument('--kd_coarse_weight', type=float, default=0.02,
+                    help='weight for pooled coarse TFB distillation')
+parser.add_argument('--kd_full_weight', type=float, default=0.02,
+                    help='weight for full-resolution TFB distillation')
+parser.add_argument('--kd_band_weight', type=float, default=0.05,
+                    help='weight for low/mid/high time-domain distillation')
+parser.add_argument('--kd_spec_weight', type=float, default=0.005,
+                    help='weight for complex spectrum distillation')
+parser.add_argument('--kd_high_weight', type=float, default=0.40,
+                    help='relative distillation weight of the high band')
 # Harmonic prior on the time-frequency kernels (ours). Default OFF = original TFDNet.
 parser.add_argument('--harm_seasonal', type=int, default=0,
                     help='1: add harmonic prior to the seasonal TFB kernels (works for MK and IK)')
