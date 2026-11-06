@@ -16,8 +16,8 @@ class TFDNetDistillLoss(nn.Module):
     """
 
     def __init__(
-            self, prediction_weight=0.10, coarse_weight=0.02,
-            full_weight=0.02, band_weight=0.05, spectrum_weight=0.005,
+            self, prediction_weight=0.10, coarse_weight=0.002,
+            full_weight=0.002, band_weight=0.005, spectrum_weight=0.0005,
             high_band_scale=0.40):
         super().__init__()
         self.prediction_weight = float(prediction_weight)
@@ -27,6 +27,15 @@ class TFDNetDistillLoss(nn.Module):
         self.spectrum_weight = float(spectrum_weight)
         self.high_band_scale = float(high_band_scale)
         self.smooth_l1 = nn.SmoothL1Loss()
+
+    @property
+    def auxiliary_weight(self):
+        return (
+            self.coarse_weight
+            + self.full_weight
+            + self.band_weight
+            + self.spectrum_weight
+        )
 
     @staticmethod
     def _complex_l1(student, teacher):
@@ -91,13 +100,14 @@ class TFDNetDistillLoss(nn.Module):
         band_output = self._band_time_loss(
             student_aux["band_output"], teacher_aux["band_output"])
 
-        weighted = (
-            self.prediction_weight * prediction
-            + self.coarse_weight * coarse
+        weighted_prediction = self.prediction_weight * prediction
+        weighted_auxiliary = (
+            self.coarse_weight * coarse
             + self.full_weight * full_core
             + self.band_weight * band_output
             + self.spectrum_weight * spectrum
         )
+        weighted = weighted_prediction + weighted_auxiliary
         return {
             "total": weighted,
             "prediction": prediction.detach(),
@@ -105,4 +115,6 @@ class TFDNetDistillLoss(nn.Module):
             "full_core": full_core.detach(),
             "spectrum": spectrum.detach(),
             "band_output": band_output.detach(),
+            "weighted_prediction": weighted_prediction.detach(),
+            "weighted_auxiliary": weighted_auxiliary.detach(),
         }

@@ -42,7 +42,9 @@ bash ./scripts/ILI.sh
 `TFDNet` implementation. It adds an additive low/mid/high decomposition and
 complex-aware frame pooling before the TFB kernels. The pooled frame axis is
 restored with interpolation plus a full-resolution residual before inverse
-STFT.
+STFT. Pool targets default to a fraction of each scale's actual frame count,
+so low-resolution and high-resolution STFT branches are all pooled. Absolute
+`--tf_pool_targets` values can still be supplied as an override.
 
 The decomposition is exactly additive:
 
@@ -61,9 +63,13 @@ python -u run_longExp.py \
   --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
   --n_fft 8 16 32 --mode MK --kernel_num 4 \
   --tri_low_kernel 25 --tri_mid_kernel 5 \
-  --tf_pool 1 --tf_pool_targets 32 64 128 \
+  --tf_pool 1 --tf_pool_ratios 0.50 0.60 0.75 \
   --tf_pool_mode avg --tf_upsample linear
 ```
+
+Band fusion starts from `--band_gate_prior 0.50 0.30 0.20` and is then
+conditioned on normalized low/mid/high energy. Both real and imaginary parts
+of complex dropout use the same mask.
 
 Run the CPU smoke test without datasets:
 
@@ -96,7 +102,7 @@ python -u run_longExp.py \
   --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
   --n_fft 8 16 32 --mode MK --kernel_num 4 \
   --tri_low_kernel 25 --tri_mid_kernel 5 \
-  --tf_pool 1 --tf_pool_targets 32 64 128 \
+  --tf_pool 1 --tf_pool_ratios 0.50 0.60 0.75 \
   --tf_pool_mode avg --tf_upsample linear \
   --kd_enable 1 \
   --kd_teacher_path ./checkpoints/kd_teacher_TFDNetTriPool_ETTh1_ftM_sl336_ll48_pl96_dm512_nh8_el2_dl1_df64_fc1_ebtimeF_dtTrue_kd_teacher_0/checkpoint.pth \
@@ -107,15 +113,17 @@ The distilled objective is:
 
 ```text
 forecast + 0.10 * prediction
-         + 0.02 * coarse TFB
-         + 0.02 * full-resolution TFB
-         + 0.05 * low/mid/high time-domain outputs
-         + 0.005 * complex spectrum
+         + 0.002 * coarse TFB
+         + 0.002 * full-resolution TFB
+         + 0.005 * low/mid/high time-domain outputs
+         + 0.0005 * complex spectrum
 ```
 
 The high-frequency auxiliary term is multiplied by `0.40`; all weights can be
-changed with the corresponding `--kd_*_weight` arguments. Teacher and student
-must use the same `seq_len`, `enc_in`, and `n_fft` values.
+changed with the corresponding `--kd_*_weight` arguments. The auxiliary weights
+are intentionally one tenth of the previous defaults to reduce their influence
+relative to the forecast and prediction-distillation objectives. Teacher and
+student must use the same `seq_len`, `enc_in`, and `n_fft` values.
 
 
 

@@ -26,6 +26,41 @@ def _odd_kernel_size(size, max_size=None):
     return max(1, size)
 
 
+class ComplexDropout(nn.Module):
+    """Apply one dropout mask to both real and imaginary components."""
+
+    def __init__(self, p=0.0):
+        super().__init__()
+        if p < 0.0 or p > 1.0:
+            raise ValueError("dropout probability must be in [0, 1]")
+        self.p = float(p)
+
+    def forward(self, x):
+        if not self.training or self.p == 0.0:
+            return x
+        if self.p == 1.0:
+            mask = torch.zeros_like(x.real)
+        else:
+            keep_prob = 1.0 - self.p
+            mask = torch.empty_like(x.real).bernoulli_(keep_prob)
+            mask.div_(keep_prob)
+        return torch.complex(x.real * mask, x.imag * mask)
+
+
+def _resolve_pooled_frames(n_frames, pool_ratio, pool_target):
+    """Resolve an absolute target or a ratio of the actual frame count."""
+    n_frames = max(1, int(n_frames))
+    pool_target = int(pool_target)
+    if pool_target > 0:
+        return min(n_frames, max(1, pool_target))
+
+    pool_ratio = float(pool_ratio)
+    if 0.0 < pool_ratio < 1.0:
+        target = int(math.floor(n_frames * pool_ratio))
+        return min(n_frames, max(1, target))
+    return n_frames
+
+
 class MovingAverage(nn.Module):
     def __init__(self, kernel_size):
         super().__init__()
@@ -210,7 +245,7 @@ class ComplexDepthwiseTemporalConv(nn.Module):
             n_freq, n_freq, kernel_size=kernel_size, padding=0, groups=n_freq)
         self.conv_imag = nn.Conv1d(
             n_freq, n_freq, kernel_size=kernel_size, padding=0, groups=n_freq)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = ComplexDropout(dropout)
 
     def forward(self, x):
         real = F.pad(x.real, (self.pad, self.pad))
@@ -229,7 +264,7 @@ class ComplexFrequencyFFN(nn.Module):
         self.bias = nn.Parameter(torch.empty(n_freq, 1, dtype=torch.complex64))
         _complex_normal_(self.weight, 1.0 / math.sqrt(2.0 * n_freq))
         _complex_normal_(self.bias, 1.0 / math.sqrt(2.0 * n_freq))
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = ComplexDropout(dropout)
 
     def forward(self, x):
         transformed = torch.einsum("bmi,mo->boi", x, self.weight) + self.bias
@@ -240,7 +275,8 @@ class BandTFEncoder(nn.Module):
     """STFT -> pooled TFB -> upsample -> residual -> frequency FFN -> iSTFT."""
 
     def __init__(self, n_channels, seq_len, n_fft, band, use_pool=True,
-                 pool_target=0, pool_mode="avg", upsample_mode="linear",
+                 pool_ratio=0.0, pool_target=0, pool_mode="avg",
+                 upsample_mode="linear",
                  kernel_num=4, individual_factor=7, mode="mk",
                  high_kernel=3, dropout=0.0):
         super().__init__()
@@ -250,10 +286,12 @@ class BandTFEncoder(nn.Module):
         self.n_frames = int(seq_len // self.hop + 1)
         self.use_pool = bool(use_pool)
         self.band = band
-        target = self.n_frames if not self.use_pool else int(pool_target)
-        if target <= 0:
-            target = self.n_frames
-        self.pooled_frames = min(self.n_frames, max(1, target))
+        self.pool_ratio = float(pool_ratio)
+        self.pool_target = int(pool_target)
+        self.pooled_frames = (
+            self.n_frames if not self.use_pool else
+            _resolve_pooled_frames(
+                self.n_frames, self.pool_ratio, self.pool_target))
         self.pool = ComplexAdaptivePool1d(pool_mode)
         self.upsample = ComplexUpsample1d(upsample_mode)
 
@@ -304,21 +342,30 @@ class TriScaleEncoder(nn.Module):
     """Three band-aware encoders at one STFT scale."""
 
     def __init__(self, n_channels, seq_len, n_fft, use_pool,
-                 pool_targets, pool_mode, upsample_mode, kernel_num,
+                 pool_ratios, pool_targets, pool_mode, upsample_mode, kernel_num,
                  individual_factor, mode, high_kernel, dropout):
         super().__init__()
         self.low = BandTFEncoder(
-            n_channels, seq_len, n_fft, "low", use_pool, pool_targets[0],
-            pool_mode, upsample_mode, kernel_num, individual_factor, mode,
-            high_kernel, dropout)
+            n_channels=n_channels, seq_len=seq_len, n_fft=n_fft, band="low",
+            use_pool=use_pool, pool_ratio=pool_ratios[0],
+            pool_target=pool_targets[0], pool_mode=pool_mode,
+            upsample_mode=upsample_mode, kernel_num=kernel_num,
+            individual_factor=individual_factor, mode=mode,
+            high_kernel=high_kernel, dropout=dropout)
         self.mid = BandTFEncoder(
-            n_channels, seq_len, n_fft, "mid", use_pool, pool_targets[1],
-            pool_mode, upsample_mode, kernel_num, individual_factor, mode,
-            high_kernel, dropout)
+            n_channels=n_channels, seq_len=seq_len, n_fft=n_fft, band="mid",
+            use_pool=use_pool, pool_ratio=pool_ratios[1],
+            pool_target=pool_targets[1], pool_mode=pool_mode,
+            upsample_mode=upsample_mode, kernel_num=kernel_num,
+            individual_factor=individual_factor, mode=mode,
+            high_kernel=high_kernel, dropout=dropout)
         self.high = BandTFEncoder(
-            n_channels, seq_len, n_fft, "high", use_pool, pool_targets[2],
-            pool_mode, upsample_mode, kernel_num, individual_factor, mode,
-            high_kernel, dropout)
+            n_channels=n_channels, seq_len=seq_len, n_fft=n_fft, band="high",
+            use_pool=use_pool, pool_ratio=pool_ratios[2],
+            pool_target=pool_targets[2], pool_mode=pool_mode,
+            upsample_mode=upsample_mode, kernel_num=kernel_num,
+            individual_factor=individual_factor, mode=mode,
+            high_kernel=high_kernel, dropout=dropout)
 
     def forward(self, low, mid, high, return_aux=False):
         modules = (self.low, self.mid, self.high)

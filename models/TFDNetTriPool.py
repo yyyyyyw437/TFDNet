@@ -17,10 +17,21 @@ class Model(nn.Module):
         self.dropout_rate = float(configs.dropout)
 
         self.use_pool = bool(getattr(configs, "tf_pool", 1))
+        self.pool_ratios = list(getattr(
+            configs, "tf_pool_ratios", [0.50, 0.60, 0.75]))
         self.pool_targets = list(getattr(
-            configs, "tf_pool_targets", [32, 64, 128]))
+            configs, "tf_pool_targets", [0, 0, 0]))
+        if len(self.pool_ratios) != 3:
+            raise ValueError("tf_pool_ratios must contain [low, mid, high]")
         if len(self.pool_targets) != 3:
             raise ValueError("tf_pool_targets must contain [low, mid, high]")
+        if not any(int(target) > 0 for target in self.pool_targets):
+            if any(
+                    not 0.0 < float(ratio) < 1.0
+                    for ratio in self.pool_ratios):
+                raise ValueError(
+                    "tf_pool_ratios values must be in (0, 1) when no "
+                    "absolute tf_pool_targets are provided")
         self.pool_mode = str(getattr(configs, "tf_pool_mode", "avg"))
         self.upsample_mode = str(getattr(configs, "tf_upsample", "linear"))
         self.high_kernel = int(getattr(configs, "tri_high_kernel", 3))
@@ -39,6 +50,7 @@ class Model(nn.Module):
                 seq_len=self.seq_len,
                 n_fft=int(n_fft),
                 use_pool=self.use_pool,
+                pool_ratios=self.pool_ratios,
                 pool_targets=self.pool_targets,
                 pool_mode=self.pool_mode,
                 upsample_mode=self.upsample_mode,
@@ -62,6 +74,15 @@ class Model(nn.Module):
             nn.GELU(),
             nn.Linear(gate_hidden, 3),
         )
+        band_prior = torch.tensor(
+            list(getattr(configs, "band_gate_prior", [0.50, 0.30, 0.20])),
+            dtype=torch.float32)
+        if band_prior.numel() != 3 or torch.any(band_prior <= 0):
+            raise ValueError(
+                "band_gate_prior must contain three positive values")
+        band_prior = band_prior / band_prior.sum()
+        self.register_buffer(
+            "band_gate_prior", band_prior, persistent=False)
         for module in self.band_gate.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
@@ -69,7 +90,8 @@ class Model(nn.Module):
                     nn.init.zeros_(module.bias)
         last_linear = self.band_gate[-1]
         with torch.no_grad():
-            last_linear.weight.zero_()
+            last_linear.weight.mul_(0.10)
+            last_linear.bias.copy_(band_prior.log())
 
         self.last_band_weights = None
 
@@ -120,11 +142,14 @@ class Model(nn.Module):
         mid_out = mid_out.reshape(batch, channels, self.seq_len)
         high_out = high_out.reshape(batch, channels, self.seq_len)
         band_energy = torch.stack([
-            torch.log1p(low_out.abs().mean(dim=(1, 2))),
-            torch.log1p(mid_out.abs().mean(dim=(1, 2))),
-            torch.log1p(high_out.abs().mean(dim=(1, 2))),
+            low_out.abs().mean(dim=(1, 2)),
+            mid_out.abs().mean(dim=(1, 2)),
+            high_out.abs().mean(dim=(1, 2)),
         ], dim=-1)
-        band_weights = F.softmax(self.band_gate(band_energy), dim=-1)
+        band_features = torch.log(band_energy.clamp_min(1e-6))
+        band_features = (
+            band_features - band_features.mean(dim=-1, keepdim=True))
+        band_weights = F.softmax(self.band_gate(band_features), dim=-1)
         self.last_band_weights = band_weights.detach()
 
         fused = (

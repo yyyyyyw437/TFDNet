@@ -50,8 +50,13 @@ parser.add_argument('--tri_mid_kernel', type=int, default=5,
 parser.add_argument('--tf_pool', type=int, default=1,
                     help='1: pool STFT frames before the TFB kernel, 0: disable')
 parser.add_argument('--tf_pool_targets', nargs=3, type=int,
-                    default=[32, 64, 128],
-                    help='target frame counts for low, mid, high bands')
+                    default=[0, 0, 0],
+                    help='optional absolute frame counts for low, mid, high '
+                         'bands; positive values override tf_pool_ratios')
+parser.add_argument('--tf_pool_ratios', nargs=3, type=float,
+                    default=[0.50, 0.60, 0.75],
+                    help='fraction of actual STFT frames kept for low, mid, '
+                         'high bands')
 parser.add_argument('--tf_pool_mode', type=str, default='avg',
                     choices=['avg', 'energy'],
                     help='complex-aware pooling mode')
@@ -62,6 +67,9 @@ parser.add_argument('--tri_high_kernel', type=int, default=3,
                     help='depthwise temporal kernel for the high-frequency band')
 parser.add_argument('--band_gate_hidden', type=int, default=16,
                     help='hidden width for energy-based band fusion')
+parser.add_argument('--band_gate_prior', nargs=3, type=float,
+                    default=[0.50, 0.30, 0.20],
+                    help='initial low/mid/high fusion weights')
 # Teacher-student distillation: full-resolution teacher -> pooled student.
 parser.add_argument('--kd_enable', type=int, default=0,
                     help='1: distill a full-resolution TFDNetTriPool teacher')
@@ -69,13 +77,13 @@ parser.add_argument('--kd_teacher_path', type=str, default='',
                     help='teacher checkpoint.pth or its experiment directory')
 parser.add_argument('--kd_pred_weight', type=float, default=0.10,
                     help='weight for prediction-space distillation')
-parser.add_argument('--kd_coarse_weight', type=float, default=0.02,
+parser.add_argument('--kd_coarse_weight', type=float, default=0.002,
                     help='weight for pooled coarse TFB distillation')
-parser.add_argument('--kd_full_weight', type=float, default=0.02,
+parser.add_argument('--kd_full_weight', type=float, default=0.002,
                     help='weight for full-resolution TFB distillation')
-parser.add_argument('--kd_band_weight', type=float, default=0.05,
+parser.add_argument('--kd_band_weight', type=float, default=0.005,
                     help='weight for low/mid/high time-domain distillation')
-parser.add_argument('--kd_spec_weight', type=float, default=0.005,
+parser.add_argument('--kd_spec_weight', type=float, default=0.0005,
                     help='weight for complex spectrum distillation')
 parser.add_argument('--kd_high_weight', type=float, default=0.40,
                     help='relative distillation weight of the high band')
