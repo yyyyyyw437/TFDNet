@@ -125,6 +125,42 @@ are intentionally one tenth of the previous defaults to reduce their influence
 relative to the forecast and prediction-distillation objectives. Teacher and
 student must use the same `seq_len`, `enc_in`, and `n_fft` values.
 
+## Spectral residual tri-band TFDNet
+
+`TFDNetSpectralTri` is an independent redesign that keeps the original
+`TFDNet` and `TFDNetTriPool` implementations unchanged. It addresses three
+issues in the earlier tri-band variant:
+
+- Each STFT scale is computed once instead of once per band.
+- Low, mid, and high bands are learned frequency masks over a shared spectrum.
+- Bands use independent residual gates, so they do not compete through a
+  softmax that forces their weights to sum to one.
+
+At every scale, one STFT produces a complex spectrum. The spectrum is split by
+three normalized frequency masks, transformed by band-specific blocks, and
+added back to the original spectrum through gated residuals before one inverse
+STFT. The three bands use different depthwise temporal receptive fields,
+followed by one shared frequency FFN per scale.
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetSpectralTri --model_id spectral_tri \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --spectral_low_kernel 15 --spectral_mid_kernel 5 \
+  --spectral_high_kernel 3 \
+  --spectral_gate_prior 0.60 0.50 0.40 \
+  --spectral_mask_transition 0.08
+```
+
+This model has no pooling and no knowledge-distillation path. It is intended
+for a clean structural comparison against the original `TFDNet`.
+
+```bash
+python tools/check_spectral_tri.py
+```
+
 
 
 ## Acknowledgement

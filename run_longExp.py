@@ -16,7 +16,9 @@ parser = argparse.ArgumentParser(description='Autoformer & Transformer family fo
 parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
 parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
 parser.add_argument('--model', type=str, required=True, default='TFDNet',
-                    help='model name, options: [Autoformer, Informer, Transformer, TFDNet, TFDNetTriPool]')
+                    help='model name, options: [Autoformer, Informer, '
+                         'Transformer, TFDNet, TFDNetTriPool, '
+                         'TFDNetSpectralTri]')
 
 # data loader
 parser.add_argument('--data', type=str, required=False, default='ETTm2', help='dataset type')
@@ -70,6 +72,20 @@ parser.add_argument('--band_gate_hidden', type=int, default=16,
 parser.add_argument('--band_gate_prior', nargs=3, type=float,
                     default=[0.50, 0.30, 0.20],
                     help='initial low/mid/high fusion weights')
+# Shared-spectrum residual tri-band TFDNet.
+parser.add_argument('--spectral_low_kernel', type=int, default=15,
+                    help='depthwise temporal kernel for the low band')
+parser.add_argument('--spectral_mid_kernel', type=int, default=5,
+                    help='depthwise temporal kernel for the mid band')
+parser.add_argument('--spectral_high_kernel', type=int, default=3,
+                    help='depthwise temporal kernel for the high band')
+parser.add_argument('--spectral_gate_hidden', type=int, default=16,
+                    help='hidden width for residual band gates')
+parser.add_argument('--spectral_gate_prior', nargs=3, type=float,
+                    default=[0.60, 0.50, 0.40],
+                    help='initial independent low/mid/high residual gates')
+parser.add_argument('--spectral_mask_transition', type=float, default=0.08,
+                    help='normalized transition width of spectral band masks')
 # Teacher-student distillation: full-resolution teacher -> pooled student.
 parser.add_argument('--kd_enable', type=int, default=0,
                     help='1: distill a full-resolution TFDNetTriPool teacher')
