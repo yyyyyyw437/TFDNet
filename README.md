@@ -36,6 +36,49 @@ bash ./scripts/ILI.sh
 ```
 4. You can also run run_longExp.py.
 
+## Multi-scale convolution TFB
+
+`TFDNetConv` keeps the original TFDNet seasonal/trend decomposition,
+multi-scale STFT, frequency FFN, and inverse STFT. It replaces the dense
+`N x N` temporal mixing matrix with a bank of complex temporal convolutions:
+
+```text
+kernel sizes:  3, 5, 9
+dilations:     1, 2, 4
+```
+
+Each frequency keeps a separate depthwise convolution. Branch outputs are
+combined by input-dependent gates. In IK mode the temporal convolution weights
+are channel-specific; in MK mode they are shared across channels.
+
+There is no pooling, upsampling, low-rank factorization, teacher, or student.
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetConv --model_id conv_tfb \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode MK --kernel_num 4 \
+  --tf_conv_kernels 3 5 9 --tf_conv_dilations 1 2 4 \
+  --seed 2021 --itr 1
+```
+
+Run the CPU smoke test:
+
+```bash
+python tools/check_conv_tfdnet.py
+```
+
+Run the GPU forward/backward microbenchmark without a dataset:
+
+```bash
+python tools/benchmark_conv_tfdnet.py \
+  --device cuda --batch_size 32 --seq_len 336 --pred_len 96 \
+  --enc_in 7 --n_fft 8 16 32 --mode MK \
+  --tf_conv_kernels 3 5 9 --tf_conv_dilations 1 2 4 \
+  --warmup 5 --repeats 20
+```
+
 
 
 ## Acknowledgement
