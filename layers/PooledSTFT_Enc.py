@@ -18,6 +18,19 @@ def _resolve_pooled_frames(n_frames, ratio):
     return n_frames
 
 
+def _complex_to_channels(x):
+    batch, n_freq, n_frames = x.shape
+    channels = torch.view_as_real(x).permute(0, 1, 3, 2)
+    channels = channels.reshape(batch * n_freq * 2, 1, n_frames)
+    return channels, batch, n_freq
+
+
+def _channels_to_complex(channels, batch, n_freq, n_frames):
+    channels = channels.reshape(batch, n_freq, 2, n_frames)
+    channels = channels.permute(0, 1, 3, 2).contiguous()
+    return torch.view_as_complex(channels)
+
+
 class ComplexAdaptivePool1d(nn.Module):
     """Pool complex STFT frames with a shared real-valued operation."""
 
@@ -33,31 +46,26 @@ class ComplexAdaptivePool1d(nn.Module):
         if target_frames == n_frames:
             return x
 
-        batch, n_freq, _ = x.shape
-        real = x.real.reshape(batch * n_freq, 1, n_frames)
-        imag = x.imag.reshape(batch * n_freq, 1, n_frames)
+        channels, batch, n_freq = _complex_to_channels(x)
         if self.mode == "avg":
-            real = F.adaptive_avg_pool1d(real, target_frames)
-            imag = F.adaptive_avg_pool1d(imag, target_frames)
+            pooled = F.adaptive_avg_pool1d(channels, target_frames)
         else:
-            energy = real.square() + imag.square()
-            pooled_real = []
-            pooled_imag = []
+            paired = channels.reshape(batch * n_freq, 2, n_frames)
+            energy = paired.square().sum(dim=1)
+            pooled = []
             for index in range(target_frames):
                 start = int(math.floor(index * n_frames / target_frames))
                 end = int(math.ceil(
                     (index + 1) * n_frames / target_frames))
                 weights = torch.softmax(energy[..., start:end], dim=-1)
-                pooled_real.append(
-                    (weights * real[..., start:end]).sum(dim=-1))
-                pooled_imag.append(
-                    (weights * imag[..., start:end]).sum(dim=-1))
-            real = torch.stack(pooled_real, dim=-1)
-            imag = torch.stack(pooled_imag, dim=-1)
+                pooled.append((
+                    paired[..., start:end]
+                    * weights.unsqueeze(1)).sum(dim=-1))
+            pooled = torch.stack(pooled, dim=-1)
+            pooled = pooled.reshape(batch * n_freq * 2, 1, target_frames)
 
-        real = real.reshape(batch, n_freq, target_frames)
-        imag = imag.reshape(batch, n_freq, target_frames)
-        return torch.complex(real, imag)
+        return _channels_to_complex(
+            pooled, batch, n_freq, target_frames)
 
 
 class ComplexUpsample1d(nn.Module):
@@ -74,17 +82,13 @@ class ComplexUpsample1d(nn.Module):
         if n_frames == target_frames:
             return x
 
-        batch, n_freq, _ = x.shape
-        real = x.real.reshape(batch * n_freq, 1, n_frames)
-        imag = x.imag.reshape(batch * n_freq, 1, n_frames)
+        channels, batch, n_freq = _complex_to_channels(x)
         kwargs = {"size": int(target_frames), "mode": self.mode}
         if self.mode == "linear":
             kwargs["align_corners"] = False
-        real = F.interpolate(real, **kwargs)
-        imag = F.interpolate(imag, **kwargs)
-        real = real.reshape(batch, n_freq, target_frames)
-        imag = imag.reshape(batch, n_freq, target_frames)
-        return torch.complex(real, imag)
+        channels = F.interpolate(channels, **kwargs)
+        return _channels_to_complex(
+            channels, batch, n_freq, target_frames)
 
 
 class PooledSeasonalEncoder(nn.Module):
@@ -163,8 +167,9 @@ class PooledSeasonalEncoder(nn.Module):
 
         full_core = self.upsample(core, full_frames)
         transformed = torch.einsum(
-            "bfn,fo->bon", full_core, self.wf1) + self.bf1
-        spectrum = full_core + complex_tanh(transformed)
+            "bfn,fo->bon", core, self.wf1) + self.bf1
+        pooled_spectrum = core + complex_tanh(transformed)
+        spectrum = self.upsample(pooled_spectrum, full_frames)
 
         out = torch.istft(
             spectrum, n_fft=self.n_fft,
@@ -217,8 +222,9 @@ class PooledTrendEncoder(nn.Module):
         core = torch.einsum("bfn,fno->bfo", frames, self.wc)
         full_core = self.upsample(core, full_frames)
         transformed = torch.einsum(
-            "bfn,fo->bon", full_core, self.wf1) + self.bf1
-        spectrum = full_core + complex_tanh(transformed)
+            "bfn,fo->bon", core, self.wf1) + self.bf1
+        pooled_spectrum = core + complex_tanh(transformed)
+        spectrum = self.upsample(pooled_spectrum, full_frames)
         out = torch.istft(
             spectrum, n_fft=self.n_fft,
             hop_length=int(self.n_fft * 0.5), window=window, length=q.shape[-1])

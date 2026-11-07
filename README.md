@@ -50,8 +50,17 @@ implementation targets the standard non-harmonic TFDNet path.
 - `--seed`: base random seed; each additional `--itr` increments it by one
 
 Pooling is applied before the TFB kernels, so it reduces both TFB computation
-and parameter count. The pooled core is interpolated back to the original STFT
-frame count before the frequency FFN and inverse STFT.
+and parameter count. The frequency FFN is evaluated at pooled resolution, and
+the transformed spectrum is interpolated back before inverse STFT.
+
+This branch also provides an optimized execution path:
+
+- real and imaginary components are pooled in one batched call
+- real and imaginary components are upsampled in one batched call
+- the frequency FFN runs at the pooled frame count before upsampling
+
+These changes keep the model capacity unchanged and target GPU operator
+overhead. They do not change the number of trainable parameters.
 
 Run the pool-only comparison:
 
@@ -93,6 +102,15 @@ Run the CPU smoke test:
 
 ```bash
 python tools/check_pool_tfdnet.py
+```
+
+Run the GPU forward/backward microbenchmark without a dataset:
+
+```bash
+python tools/benchmark_pooled_tfdnet.py \
+  --device cuda --batch_size 32 --seq_len 336 --pred_len 96 \
+  --enc_in 7 --n_fft 8 16 32 --mode IK \
+  --warmup 5 --repeats 20
 ```
 
 
