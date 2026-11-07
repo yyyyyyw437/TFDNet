@@ -36,6 +36,44 @@ bash ./scripts/ILI.sh
 ```
 4. You can also run run_longExp.py.
 
+## Low-rank temporal TFB
+
+`TFDNetLowRank` keeps the original TFDNet seasonal/trend decomposition,
+multi-scale STFT, frequency FFN, and inverse STFT. It only replaces every
+dense temporal TFB matrix with two low-rank factors:
+
+```text
+dense:     X [B,F,N] x K [F,N,N]
+low-rank:  X [B,F,N] x U [F,N,R] x V [F,R,N]
+```
+
+The full time-frame resolution is preserved. There is no pooling, upsampling,
+teacher, student, or knowledge distillation in this model.
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetLowRank --model_id lowrank_tfb \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --lowrank_rank 8 --seed 2021 --itr 1
+```
+
+Run the CPU smoke test:
+
+```bash
+python tools/check_lowrank_tfdnet.py
+```
+
+Run the GPU forward/backward microbenchmark without a dataset:
+
+```bash
+python tools/benchmark_lowrank_tfdnet.py \
+  --device cuda --batch_size 32 --seq_len 336 --pred_len 96 \
+  --enc_in 7 --n_fft 8 16 32 --mode IK \
+  --lowrank_rank 8 --warmup 5 --repeats 20
+```
+
 
 
 ## Acknowledgement
