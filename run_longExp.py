@@ -6,9 +6,17 @@ import random
 import numpy as np
 
 fix_seed = 2021
-random.seed(fix_seed)
-torch.manual_seed(fix_seed)
-np.random.seed(fix_seed)
+
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+set_seed(fix_seed)
 
 parser = argparse.ArgumentParser(description='Autoformer & Transformer family for Time Series Forecasting')
 
@@ -16,7 +24,8 @@ parser = argparse.ArgumentParser(description='Autoformer & Transformer family fo
 parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
 parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
 parser.add_argument('--model', type=str, required=True, default='TFDNet',
-                    help='model name, options: [Autoformer, Informer, Transformer,TFDNet]')
+                    help='model name, options: [Autoformer, Informer, '
+                         'Transformer, TFDNet, TFDNetPool]')
 
 # data loader
 parser.add_argument('--data', type=str, required=False, default='ETTm2', help='dataset type')
@@ -42,6 +51,32 @@ parser.add_argument('--individual_factor', type=int, default=7, help='individual
 parser.add_argument('--kernel_num', type=int, default=4, help='Kernel number for MK mode')
 parser.add_argument('--mode', type=str, default='MK', help='mode in seasonal blcok [gate,low_rank]')
 parser.add_argument('--n_fft',nargs='+',type=int,default = [8,16,32], help='FFT length')
+# Pooled original TFDNet. TFDNet itself is unchanged.
+parser.add_argument('--tf_pool', type=int, default=1,
+                    help='1: pool STFT frames in TFDNetPool, 0: disable')
+parser.add_argument('--tf_pool_ratios', nargs=2, type=float,
+                    default=[0.50, 0.75],
+                    help='kept frame ratios for seasonal and trend branches')
+parser.add_argument('--tf_pool_mode', type=str, default='avg',
+                    choices=['avg', 'energy'],
+                    help='complex-aware pooling mode')
+parser.add_argument('--tf_upsample', type=str, default='linear',
+                    choices=['linear', 'nearest'],
+                    help='frame interpolation before inverse STFT')
+parser.add_argument('--kd_enable', type=int, default=0,
+                    help='1: distill a full-resolution TFDNetPool teacher')
+parser.add_argument('--kd_teacher_path', type=str, default='',
+                    help='teacher checkpoint.pth or experiment directory')
+parser.add_argument('--kd_pred_weight', type=float, default=0.10,
+                    help='weight for prediction-space distillation')
+parser.add_argument('--kd_coarse_weight', type=float, default=0.002,
+                    help='weight for pooled branch-core distillation')
+parser.add_argument('--kd_full_weight', type=float, default=0.002,
+                    help='weight for full-core distillation')
+parser.add_argument('--kd_branch_weight', type=float, default=0.005,
+                    help='weight for seasonal/trend time outputs')
+parser.add_argument('--kd_spec_weight', type=float, default=0.0005,
+                    help='weight for complex spectrum distillation')
 # Harmonic prior on the time-frequency kernels (ours). Default OFF = original TFDNet.
 parser.add_argument('--harm_seasonal', type=int, default=0,
                     help='1: add harmonic prior to the seasonal TFB kernels (works for MK and IK)')
@@ -83,6 +118,8 @@ parser.add_argument('--do_predict', action='store_true', help='whether to predic
 
 # optimization
 parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
+parser.add_argument('--seed', type=int, default=2021,
+                    help='base random seed; each itr adds one')
 parser.add_argument('--itr', type=int, default=3, help='experiments times')
 parser.add_argument('--train_epochs', type=int, default=1, help='train epochs')
 parser.add_argument('--batch_size', type=int, default=128, help='batch size of train input data')
@@ -116,8 +153,10 @@ Exp = Exp_Main
 
 if args.is_training:
     for ii in range(args.itr):
+        current_seed = args.seed + ii
+        set_seed(current_seed)
         # setting record of experiments
-        setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
+        setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_seed{}_{}_{}'.format(
             args.model_id,
             args.model,
             args.data,
@@ -133,6 +172,7 @@ if args.is_training:
             args.factor,
             args.embed,
             args.distil,
+            current_seed,
             args.des, ii)
 
         exp = Exp(args)  # set experiments
@@ -149,7 +189,9 @@ if args.is_training:
         torch.cuda.empty_cache()
 else:
     ii = 0
-    setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(args.model_id,
+    current_seed = args.seed
+    set_seed(current_seed)
+    setting = '{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_seed{}_{}_{}'.format(args.model_id,
                                                                                                   args.model,
                                                                                                   args.data,
                                                                                                   args.features,
@@ -164,6 +206,7 @@ else:
                                                                                                   args.factor,
                                                                                                   args.embed,
                                                                                                   args.distil,
+                                                                                                  current_seed,
                                                                                                   args.des, ii)
 
     exp = Exp(args)  # set experiments

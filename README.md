@@ -36,6 +36,65 @@ bash ./scripts/ILI.sh
 ```
 4. You can also run run_longExp.py.
 
+## Pooled TFDNet
+
+`TFDNetPool` keeps the original TFDNet seasonal/trend decomposition and TFB
+structure. It does not use low/mid/high tri-band decomposition. The current
+implementation targets the standard non-harmonic TFDNet path.
+
+- `--tf_pool 0`: full-resolution TFDNet teacher
+- `--tf_pool 1`: adaptive STFT frame pooling before the seasonal/trend TFB
+- `--tf_pool_ratios 0.50 0.75`: retained frame ratios for seasonal/trend
+- `--kd_enable 1`: distill a full-resolution `TFDNetPool` teacher into the
+  pooled student
+- `--seed`: base random seed; each additional `--itr` increments it by one
+
+Pooling is applied before the TFB kernels, so it reduces both TFB computation
+and parameter count. The pooled core is interpolated back to the original STFT
+frame count before the frequency FFN and inverse STFT.
+
+Run the pool-only comparison:
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetPool --model_id pool_full \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --tf_pool 0 --kd_enable 0 --seed 2021 --itr 1
+```
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetPool --model_id pool_direct \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --tf_pool 1 --tf_pool_ratios 0.50 0.75 \
+  --tf_pool_mode avg --tf_upsample linear --kd_enable 0 \
+  --seed 2021 --itr 1
+```
+
+For distillation, first train `pool_full`, then point the pooled student at
+that checkpoint:
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetPool --model_id pool_kd \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --tf_pool 1 --tf_pool_ratios 0.50 0.75 \
+  --kd_enable 1 --kd_teacher_path <pool_full checkpoint.pth> \
+  --seed 2021 --itr 1
+```
+
+Run the CPU smoke test:
+
+```bash
+python tools/check_pool_tfdnet.py
+```
+
 
 
 ## Acknowledgement
