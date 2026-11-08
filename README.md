@@ -36,6 +36,70 @@ bash ./scripts/ILI.sh
 ```
 4. You can also run run_longExp.py.
 
+## Frequency, patch, and channel components
+
+`TFDNetHybrid` exposes three independent components:
+
+- the original TFDNet seasonal/trend frequency branch
+- a PatchTST-style temporal patch branch
+- lightweight low-rank residual channel mixing
+
+The components can be evaluated separately or combined:
+
+```text
+frequency only:
+--use_freq_branch 1 --use_patch_branch 0 --use_channel_fusion 0
+
+patch only:
+--use_freq_branch 0 --use_patch_branch 1 --use_channel_fusion 0
+
+frequency + patch:
+--use_freq_branch 1 --use_patch_branch 1 --use_channel_fusion 0
+
+frequency + patch + channel:
+--use_freq_branch 1 --use_patch_branch 1 --use_channel_fusion 1
+```
+
+The patch branch uses non-overlapping or overlapping patches, a linear patch
+embedding, positional encoding, and a lightweight Transformer encoder. The
+frequency and patch branches produce normalized forecasts, which are combined
+with learnable branch weights. Channel fusion is a residual low-rank MLP over
+the channel axis.
+
+```bash
+python -u run_longExp.py \
+  --is_training 1 --model TFDNetHybrid --model_id hybrid_freq_patch \
+  --data ETTm2 --root_path ./Datasets --data_path ETTm2.csv \
+  --seq_len 336 --pred_len 96 --enc_in 7 --dec_in 7 --c_out 7 \
+  --n_fft 8 16 32 --mode IK --individual_factor 7 \
+  --use_freq_branch 1 --use_patch_branch 1 \
+  --use_channel_fusion 0 \
+  --patch_len 16 --patch_stride 8 \
+  --patch_d_model 32 --patch_n_heads 4 \
+  --patch_e_layers 1 --patch_d_ff 64 \
+  --seed 2021 --itr 1
+```
+
+Add `--use_channel_fusion 1 --channel_rank 4` to test the channel component.
+
+Run the CPU smoke test:
+
+```bash
+python tools/check_hybrid_tfdnet.py
+```
+
+Compare the cost of all four component combinations without a dataset:
+
+```bash
+python tools/benchmark_hybrid_tfdnet.py \
+  --device cuda --batch_size 32 --seq_len 336 --pred_len 96 \
+  --enc_in 7 --n_fft 8 16 32 --mode IK \
+  --patch_len 16 --patch_stride 8 \
+  --patch_d_model 32 --patch_n_heads 4 \
+  --patch_e_layers 1 --patch_d_ff 64 \
+  --channel_rank 4 --warmup 5 --repeats 20
+```
+
 
 
 ## Acknowledgement

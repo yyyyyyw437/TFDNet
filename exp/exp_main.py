@@ -1,6 +1,7 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
-from models import Informer, Autoformer, Transformer, DLinear,TFDNet
+from models import Informer, Autoformer, Transformer, DLinear, TFDNet
+from models import TFDNetHybrid
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
 from torch.optim import lr_scheduler
 from utils.metrics import metric
@@ -38,6 +39,7 @@ class Exp_Main(Exp_Basic):
             'Informer': Informer,
             'DLinear': DLinear,
             'TFDNet':TFDNet,
+            'TFDNetHybrid': TFDNetHybrid,
         }
         model = model_dict[self.args.model].Model(self.args).float()
 
